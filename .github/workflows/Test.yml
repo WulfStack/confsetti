@@ -1,0 +1,124 @@
+name: Test Suite
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - develop
+      - '*.x'
+env:
+  NODE_VERSIONS: '["20.x", "18.x"]'
+  LINT_SCRIPTS: '["lint:tests", "lint:src", "test:types"]'
+  TEST_SCRIPTS: '["test:spec", "test:unit"]'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+  lint:
+    needs:
+      - setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lint-script: [ "lint:tests", "lint:src", "test:types" ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint tests
+        id: test
+        run: |
+          result=""
+          if npm run ${{ matrix.lint-script }}; then
+          result="pass"
+          else
+          result="fail"
+          fi
+          echo $result > lint-result
+
+  test:
+    needs:
+      - setup
+      - lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [ "20.x", "18.x" ]
+        test-script: [ "test:spec", "test:unit" ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: |
+          result=""
+          if npm run ${{ matrix.test-script }}; then
+            result="pass"
+          else
+            result="fail"
+          fi
+          echo $result > test-result
+
+      - name: Generate SHA-256 hash
+        run: |
+          echo "hash=$(echo -n "${{ matrix.node-version }}-${{ matrix.test-script }}" | openssl dgst -sha256)" >> $GITHUB_ENV
+
+      - name: Upload test result
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-result-${{ env.hash }}
+          path: test-result
+
+  check-failures:
+    needs:
+     - test
+     - lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Check for failures
+        run: |
+          failed=false
+          for file in $(ls); do
+            if grep -q "fail" $file; then
+              failed=true
+              break
+            fi
+          done
+          if [[ "$failed" == "true" ]]; then
+            exit 1
+          fi

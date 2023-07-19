@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      releaseType:
+        description: 'Release'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Dry Run
+  push:
+    branches:
+      - main
+      - develop
+      - '*.x'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: Release
+    outputs:
+      node-version: ${{ steps.setup.outputs.node-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get Node.js version
+        id: setup
+        run: echo "node-version=$(node --version)" >> $GITHUB_ENV
+
+  lint:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-script: [ 'lint:src', 'lint:tests', 'test:types' ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ steps.setup.outputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint tests
+        run: npm run ${{ matrix.test-script }}
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [ '18.x', '20.x' ]
+        test-script: [ 'test:spec', 'test:unit' ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run ${{ matrix.test-script }}
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build-script: ['build:types', 'build:cjs', 'build:esm', 'build:umd']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ steps.setup.outputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run ${{ matrix.build-script }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build
+          path: dist/
+
+  minify:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        minify-script: ['minify:cjs', 'minify:esm', 'minify:umd']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ steps.setup.outputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build
+          path: dist/
+
+      - name: Minify
+        run: npm run ${{ matrix.minify-script }}
+
+      - name: Upload minified artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist
+          path: dist/
+
+  release:
+    needs:
+      - test
+      - build
+      - minify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    environment: Release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ steps.setup.outputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: dist
+          path: dist/
+
+      - name: Semantic Release
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+            GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
+            GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
+            GIT_COMMITTER_NAME: ${{ vars.GIT_COMMITTER_NAME }}
+            GIT_COMMITTER_EMAIL: ${{ vars.GIT_COMMITTER_EMAIL }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.release-type }}" == "Dry Run" ]]; then
+            npm run release --dry-run
+          else
+            npm run release
+          fi
