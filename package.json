@@ -74,7 +74,7 @@
     "rimraf": "^5.0.1",
     "semantic-release": "^21.0.7",
     "semver": "^7.5.4",
-    "terser": "^5.19.1",
+    "terser": "^5.19.2",
     "ts-jest": "^29.1.1",
     "typedoc": "^0.24.8",
     "typescript": "~5.1.6"
